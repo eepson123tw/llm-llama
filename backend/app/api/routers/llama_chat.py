@@ -1,16 +1,45 @@
 import io
 import os
 import torch
-from fastapi import APIRouter, FastAPI, HTTPException, Body
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from PIL import Image
 from transformers import MllamaForConditionalGeneration, AutoProcessor
 from huggingface_hub import login
 import logging
 import requests
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import re
 import base64
+from openai import OpenAI
+from pydantic import BaseModel
+from llama_index.core.llms import ChatMessage
+import json
+
+openai_api_key = "EMPTY"
+openai_api_base = "http://localhost:8000/v1"
+
+client = OpenAI(
+    api_key=openai_api_key,
+    base_url=openai_api_base,
+)
+
+# 定義 Pydantic 模型
+class ImageContent(BaseModel):
+    type: str
+    text: Optional[str] = None
+    image_url: Optional[Dict[str, str]] = None
+
+class Message(BaseModel):
+    role: str
+    content: Union[str, List[ImageContent]]
+
+class Data(BaseModel):
+    imageUrl: str
+
+class ImageRequest(BaseModel):
+    messages: List[Message]
+    data: Data
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -19,17 +48,19 @@ logger = logging.getLogger(__name__)
 # Initialize APIRouter
 llama_chat_router = APIRouter()
 
-def clean_output(text):
+def clean_output(text: str) -> str:
     # 移除所有 <|...|> 标记
     clean_text = re.sub(r"<\|.*?\|>", "", text)
     return clean_text.strip()
 
+def encode_image(image_path: str) -> str:
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
 # Healthcheck endpoint
 @llama_chat_router.get("/healthcheck")
 def healthcheck():
-    print('123123')
     return JSONResponse(content={"response": 'Hello world!'})
-
 
 # Load model and processor
 def load_model():
@@ -37,12 +68,11 @@ def load_model():
     model_id = "meta-llama/Llama-3.2-11B-Vision-Instruct"
     
     try:
-        # Get Hugging Face Token from environment variables
-        hubToken = os.getenv("HUGGINGFACE_HUB_TOKEN")
-        if not hubToken:
+        hub_token = os.getenv("HUGGINGFACE_HUB_TOKEN")
+        if not hub_token:
             raise ValueError("HUGGINGFACE_HUB_TOKEN is not set in environment variables.")
         
-        login(token=hubToken)
+        login(token=hub_token)
         
         # Load model with bfloat16
         model = MllamaForConditionalGeneration.from_pretrained(
@@ -59,7 +89,6 @@ def load_model():
         logger.error(f"Error loading model: {e}")
         raise e
 
-
 @llama_chat_router.get("/check_gpu_memory")
 def check_gpu_memory():
     if torch.cuda.is_available():
@@ -69,45 +98,76 @@ def check_gpu_memory():
             reserved_mem = torch.cuda.memory_reserved(device)
             allocated_mem = torch.cuda.memory_allocated(device)
             free_mem = reserved_mem - allocated_mem
-            print(f"GPU {i}:")
-            print(f"  总内存: {total_mem / (1024 ** 3):.2f} GB")
-            print(f"  已分配内存: {allocated_mem / (1024 ** 3):.2f} GB")
-            print(f"  保留内存: {reserved_mem / (1024 ** 3):.2f} GB")
-            print(f"  空闲内存: {free_mem / (1024 ** 3):.2f} GB")
+            logger.info(f"GPU {i}:")
+            logger.info(f"  Total Memory: {total_mem / (1024 ** 3):.2f} GB")
+            logger.info(f"  Allocated Memory: {allocated_mem / (1024 ** 3):.2f} GB")
+            logger.info(f"  Reserved Memory: {reserved_mem / (1024 ** 3):.2f} GB")
+            logger.info(f"  Free Memory: {free_mem / (1024 ** 3):.2f} GB")
     else:
-        print("CUDA 不可用。")
-
+        logger.warning("CUDA is not available.")
 
 # Llama generation endpoint
 @llama_chat_router.post("/generate_llama")
-def generate_llama():
+def generate_llama(request: ImageRequest):
     try:
-        url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/0052a70beed5bf71b92610a43a52df6d286cd5f3/diffusers/rabbit.jpg"
-        image = Image.open(requests.get(url, stream=True).raw)
+        image_url = request.data.imageUrl
+        if not image_url:
+            raise ValueError("No imageUrl provided")
+        
+        match = re.match(r'data:(image/\w+);base64,(.+)', image_url)
 
-        messages = [
-            {"role": "user", "content": [
-                {"type": "image"},
-                {"type": "text", "text": "If I had to write a haiku for this one, it would be: "}
-            ]}
+        if not match:
+            raise ValueError("Invalid imageUrl format")
+        
+        mime_type, image_base64 = match.groups()
+
+        last_message = request.messages[0]
+
+        if not last_message.content:
+            raise ValueError("No content provided")
+        
+        messages_list = [
+            ChatMessage(
+                role=m.role,
+                content=m.content,
+            )
+            for m in request.messages
         ]
-        input_text = processor.apply_chat_template(messages, add_generation_prompt=True)
-        inputs = processor(
-            image,
-            input_text,
-            add_special_tokens=False,
-            return_tensors="pt"
-        ).to(model.device)
 
+        llama_messages = [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": last_message.content
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{image_base64}"
+                    },
+                },
+            ],
+        }]
 
-        output = model.generate(**inputs, max_new_tokens=30)
-        decoded_output = processor.decode(output[0])
+        chat_completion = client.chat.completions.create(
+            messages=llama_messages,
+            model='/app/model/Llama-3.2-11B-Vision-Instruct',
+            max_tokens=64,
+        )
+        message = chat_completion.choices[0].message.content
 
-        clean_text = clean_output(decoded_output)
+        # Convert the message object to a dictionary
+        result = {"message":message,"url":image_url}  # If message is a Pydantic model
+        # If .dict() is not available, manually create the dictionary
+        # result = {'role': message.role, 'content': message.content}
 
-        return JSONResponse(content={"response": clean_text})
+        # Add the new 'url' key to the result dictionary
+        # result['url'] = request.data.imageUrl
+        # Proceed as before
+        json_string = json.dumps(dict(result))
+        return  Response(content=json_string, media_type="application/json")
+
     except Exception as e:
         logger.error(f"Error in generate_llama: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
-

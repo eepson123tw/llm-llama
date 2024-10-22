@@ -15,13 +15,24 @@ interface ChatMessageImageData {
 }
 
 // This component will parse message data and render the appropriate UI.
-function ChatMessageData({ messageData }: { messageData: JSONValue }) {
-  const { image_url, type } = messageData as unknown as ChatMessageImageData;
-  if (type === "image_url") {
+function ChatMessageData( {messageData}:{messageData:string} ) {
+
+  if (messageData) {
+
+    const base64Regex = /"url":\s*"([^"]+)"/;
+    const match = messageData.match(base64Regex);
+    let base64Data = "";
+    if (match && match[1]) {
+      base64Data = match[1];
+      console.log('Extracted base64 data:', base64Data);
+    } else {
+      console.log('No base64 data found.');
+    }
+
     return (
       <div className="rounded-md max-w-[200px] shadow-md">
         <Image
-          src={image_url.url}
+          src={base64Data}
           width={0}
           height={0}
           sizes="100vw"
@@ -36,15 +47,26 @@ function ChatMessageData({ messageData }: { messageData: JSONValue }) {
 
 export default function ChatMessage(chatMessage: Message) {
   const { isCopied, copyToClipboard } = useCopyToClipboard({ timeout: 2000 });
+  const hasContent = chatMessage.content.includes('url')
+  const data = hasContent ? chatMessage.content : ''
+   const base64Regex = /"message":\s*"([^"]+)"/;
+   let content = ''
+   const match = chatMessage.content.match(base64Regex);
+    if (match && match[1]) {
+      content = match[1];
+      console.log('Extracted base64 data:', content);
+    } else {
+      console.log('No base64 data found.');
+    }
   return (
     <div className="flex items-start gap-4 pr-5 pt-5">
       <ChatAvatar role={chatMessage.role} />
       <div className="group flex flex-1 justify-between gap-2">
         <div className="flex-1 space-y-4">
-          {chatMessage.data && (
-            <ChatMessageData messageData={chatMessage.data} />
+          {hasContent && (
+            <ChatMessageData messageData={data} />
           )}
-          <Markdown content={chatMessage.content} />
+          <Markdown content={ content||chatMessage.content} />
         </div>
         <Button
           onClick={() => copyToClipboard(chatMessage.content)}

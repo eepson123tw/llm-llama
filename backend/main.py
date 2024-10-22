@@ -19,7 +19,7 @@ app = FastAPI()
 
 init_settings()
 
-load_model()
+# load_model()
 
 environment = os.getenv("ENVIRONMENT", "dev")  # Default to 'development' if not set
 
