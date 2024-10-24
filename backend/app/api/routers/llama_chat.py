@@ -13,7 +13,7 @@ import re
 import base64
 from openai import OpenAI
 from pydantic import BaseModel
-from llama_index.core.llms import ChatMessage
+# from llama_index.core.llms import ChatMessage
 import json
 
 openai_api_key = "EMPTY"
@@ -121,18 +121,11 @@ def generate_llama(request: ImageRequest):
         
         mime_type, image_base64 = match.groups()
 
-        last_message = request.messages[0]
+        last_message = request.messages[request.messages.__len__() - 1]
 
         if not last_message.content:
             raise ValueError("No content provided")
         
-        messages_list = [
-            ChatMessage(
-                role=m.role,
-                content=m.content,
-            )
-            for m in request.messages
-        ]
 
         llama_messages = [{
             "role": "user",
@@ -153,20 +146,17 @@ def generate_llama(request: ImageRequest):
         chat_completion = client.chat.completions.create(
             messages=llama_messages,
             model='/app/model/Llama-3.2-11B-Vision-Instruct',
-            max_tokens=64,
+            max_tokens=1200,
+            
         )
-        message = chat_completion.choices[0].message.content
 
+        message = chat_completion.choices[0].message.content
         # Convert the message object to a dictionary
         result = {"message":message,"url":image_url}  # If message is a Pydantic model
-        # If .dict() is not available, manually create the dictionary
-        # result = {'role': message.role, 'content': message.content}
 
-        # Add the new 'url' key to the result dictionary
-        # result['url'] = request.data.imageUrl
-        # Proceed as before
         json_string = json.dumps(dict(result))
-        return  Response(content=json_string, media_type="application/json")
+
+        return Response(content=json_string, media_type="application/json")
 
     except Exception as e:
         logger.error(f"Error in generate_llama: {e}")

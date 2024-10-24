@@ -13,6 +13,7 @@ const MemoizedReactMarkdown: FC<Options> = memo(
 );
 
 export default function Markdown({ content }: { content: string }) {
+   const formattedContent = content.replace(/\\n/g, '\n');
   return (
     <MemoizedReactMarkdown
       className="prose dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 break-words custom-markdown"
@@ -53,7 +54,7 @@ export default function Markdown({ content }: { content: string }) {
         },
       }}
     >
-      {content}
+      {formattedContent}
     </MemoizedReactMarkdown>
   );
 }

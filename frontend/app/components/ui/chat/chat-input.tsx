@@ -54,6 +54,24 @@ export default function ChatInput(
     }
   };
 
+  // 新增的 handlePaste 函數
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const items = e.clipboardData.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          handleUploadFile(file);
+          // 防止圖片直接粘貼到輸入框中
+          e.preventDefault();
+        }
+      }
+    }
+  };
+
   return (
     <form
       onSubmit={onSubmit}
@@ -62,7 +80,7 @@ export default function ChatInput(
       {imageUrl && (
         <UploadImagePreview url={imageUrl} onRemove={onRemovePreviewImage} />
       )}
-      <div className="flex w-full items-start justify-between gap-4 ">
+      <div className="flex w-full items-start justify-between gap-4">
         <Input
           autoFocus
           name="message"
@@ -70,6 +88,7 @@ export default function ChatInput(
           className="flex-1"
           value={props.input}
           onChange={props.handleInputChange}
+          onPaste={handlePaste} // 綁定 onPaste 事件
         />
         <FileUploader
           onFileUpload={handleUploadFile}
