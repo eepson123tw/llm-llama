@@ -28,7 +28,9 @@ export default function ChatInput(
       setImageUrl(null);
       return;
     }
-    props.handleSubmit(e);
+    props.handleSubmit(e,{
+        data: { imageUrl: "" },
+      });
   };
 
   const onRemovePreviewImage = () => setImageUrl(null);
@@ -54,7 +56,6 @@ export default function ChatInput(
     }
   };
 
-  // 新增的 handlePaste 函數
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
     const items = e.clipboardData.items;
     if (!items) return;
@@ -65,7 +66,6 @@ export default function ChatInput(
         const file = item.getAsFile();
         if (file) {
           handleUploadFile(file);
-          // 防止圖片直接粘貼到輸入框中
           e.preventDefault();
         }
       }

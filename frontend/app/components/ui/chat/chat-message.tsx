@@ -1,6 +1,6 @@
 import { Check, Copy } from "lucide-react";
 
-import { JSONValue, Message } from "ai";
+import { Message } from "ai";
 import Image from "next/image";
 import { Button } from "../button";
 import ChatAvatar from "./chat-avatar";
@@ -14,32 +14,26 @@ interface ChatMessageImageData {
   };
 }
 
+const getRequiredData = (data: string,regex:RegExp): string => {
+  return data.match(regex)?.[1] || "";
+};
+
+
 // This component will parse message data and render the appropriate UI.
 function ChatMessageData( {messageData}:{messageData:string} ) {
-
   if (messageData) {
-
-    const base64Regex = /"url":\s*"([^"]+)"/;
-    const match = messageData.match(base64Regex);
-    let base64Data = "";
-    if (match && match[1]) {
-      base64Data = match[1];
-      console.log('Extracted base64 data:', base64Data);
-    } else {
-      console.log('No base64 data found.');
-    }
-
+    const src = getRequiredData(messageData,/"url":\s*"([^"]+)"/) 
     return (
-      <div className="rounded-md max-w-[200px] shadow-md">
+     src ? <div className="rounded-md max-w-[200px] shadow-md">
         <Image
-          src={base64Data}
+          src={src}
           width={0}
           height={0}
           sizes="100vw"
           style={{ width: "100%", height: "auto" }}
           alt=""
         />
-      </div>
+      </div>:null
     );
   }
   return null;
@@ -48,25 +42,16 @@ function ChatMessageData( {messageData}:{messageData:string} ) {
 export default function ChatMessage(chatMessage: Message) {
   const { isCopied, copyToClipboard } = useCopyToClipboard({ timeout: 2000 });
   const hasContent = chatMessage.content.includes('url')
-  const data = hasContent ? chatMessage.content : ''
-   const base64Regex = /"message":\s*"([^"]+)"/;
-   let content = ''
-   const match = chatMessage.content.match(base64Regex);
-    if (match && match[1]) {
-      content = match[1];
-      console.log('Extracted base64 data:', content);
-    } else {
-      console.log('No base64 data found.');
-    }
+  const content = hasContent ? getRequiredData(chatMessage.content,/"message":\s*"([^"]+)"/) : ''
   return (
     <div className="flex items-start gap-4 pr-5 pt-5">
       <ChatAvatar role={chatMessage.role} />
       <div className="group flex flex-1 justify-between gap-2">
         <div className="flex-1 space-y-4">
           {hasContent && (
-            <ChatMessageData messageData={data} />
+            <ChatMessageData messageData={chatMessage.content} />
           )}
-          <Markdown content={ content||chatMessage.content} />
+          <Markdown content={ content || chatMessage.content} />
         </div>
         <Button
           onClick={() => copyToClipboard(chatMessage.content)}
