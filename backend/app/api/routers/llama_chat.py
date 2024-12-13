@@ -1,6 +1,5 @@
 import io
 import os
-import json
 import torch
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -12,28 +11,29 @@ import requests
 from typing import Any, Dict, List, Optional, Union
 import re
 import base64
-
-from llama_index.llms.openai_like import OpenAILike
-from llama_index.core.llms import ChatMessage
+import dspy
+from openai import OpenAI
 from pydantic import BaseModel
+# from llama_index.core.llms import ChatMessage
+import json
 
-
-
+openai_api_key = "EMPTY"
 openai_api_base = "http://localhost:8000/v1"
 
+client = OpenAI(
+    api_key=openai_api_key,
+    base_url=openai_api_base,
+)
 
-llm = OpenAILike(api_base=openai_api_base, api_key="fake", model="/app/model/Llama-3.2-11B-Vision-Instruct")
+llama = dspy.HFClientVLLM(
+    model="/app/model/Llama-3.2-11B-Vision-Instruct",
+    port=8000,  # port 應為整數
+    url="http://localhost",
+    seed=42,
+    temperature=1  # 設定適當的 temperature 值,
+)
 
-
-# client = OpenAI(
-#     api_key=openai_api_key,
-#     base_url=openai_api_base,
-# )
-# llm = VllmServer(
-#     api_url="http://localhost:8000/v1", 
-#     temperature=0.7
-# )
-
+dspy.settings.configure(lm=llama)
 
 # 定義 Pydantic 模型
 class ImageContent(BaseModel):
@@ -99,9 +99,6 @@ def load_model():
     except Exception as e:
         logger.error(f"Error loading model: {e}")
         raise e
-    
-
-
 
 @llama_chat_router.get("/check_gpu_memory")
 def check_gpu_memory():
@@ -120,91 +117,65 @@ def check_gpu_memory():
     else:
         logger.warning("CUDA is not available.")
 
-
+# Llama generation endpoint
 @llama_chat_router.post("/generate_llama")
 def generate_llama(request: ImageRequest):
     try:
-        logger.info("Received request to generate_llama")
+        image_url = request.data.imageUrl
+        if not image_url:
+            raise ValueError("No imageUrl provided")
         
-        # Retrieve the last message safely
-        if not request.messages:
-            raise ValueError("No messages provided")
+        match = re.match(r'data:(image/\w+);base64,(.+)', image_url)
+
+        if not match:
+            raise ValueError("Invalid imageUrl format")
         
-        last_message = request.messages[-1]  # More Pythonic way to get the last item
+        mime_type, image_base64 = match.groups()
+
+        last_message = request.messages[request.messages.__len__() - 1]
 
         if not last_message.content:
-            raise ValueError("No content provided in the last message")
+            raise ValueError("No content provided")
         
-        # Initialize variables
-        image_url = request.data.imageUrl != "" and request.data.imageUrl or None
-        content_list = [{
-            "type": "text",
-            "text": last_message.content
-        }]
-        
-        # Process image_url if provided
-        if image_url:
-            match = re.match(r'data:(image/\w+);base64,(.+)', image_url)
-            if not match:
-                raise ValueError("Invalid imageUrl format")
-            
-            mime_type, image_base64 = match.groups()
-            image_content = {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{mime_type};base64,{image_base64}"
+   
+        classify = dspy.ChainOfThought('question -> answer', n=1)
+
+
+        response = classify(question=last_message.content)
+
+        print(f"Reasoning: {response.rationale}",last_message.content)
+
+        llama_messages = [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": last_message.content
                 },
-            }
-            content_list.append(image_content)  # Append image content to the content list
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{image_base64}"
+                    },
+                },
+            ],
+        }]
 
+        chat_completion = client.chat.completions.create(
+            messages=llama_messages,
+            model='/app/model/Llama-3.2-11B-Vision-Instruct',
+            max_tokens=2000,
+            
+        )
 
-        # Construct llama_messages
-        llama_messages = [
-            {
-                "role": "assistant",
-                "content":"Description: You are ChatGPT, an AI assistant specialized in analyzing text and images. Tasks: Text - Summarize: Provide a brief summary of main points; Key_elements: List critical components or arguments; Analysis: Offer an objective analysis of messages and implications. Image - Description: Describe visual elements in detail; Key_features: Highlight prominent features or focal points; Interpretation: Analyze possible meanings, themes, or emotions. Guidelines: Clarity: Ensure responses are clear and organized; Conciseness: Keep answers succinct; Objectivity: Maintain an objective perspective; Format: Use bullet points or structured formatting."
-            },    
-            {
-                "role": "user",
-                "content": content_list
-            }
-        ]
-        
-        logger.debug(f"Llama messages: {llama_messages}")
+        message = chat_completion.choices[0].message.content
+        # Convert the message object to a dictionary
+        result = {"message":message,"url":image_url}  # If message is a Pydantic model
 
+        json_string = json.dumps(dict(result))
 
-        messages = [
-            ChatMessage(role="system", content="You are CEO of MetaAI"),
-            ChatMessage(role="user", content="Introduce Llama3 to the world."),
-        ]
-        llmRes = llm.chat(messages)
-
-                
-        # Create chat completion using the Llama model
-        # chat_completion = llm.chat(
-        #     messages=llama_messages,
-        #     model='/app/model/Llama-3.2-11B-Vision-Instruct',
-        # )
-
-        # # Extract the response message
-        # message = chat_completion.choices[0].message.content
-
-        # # Prepare the result
-        result = {
-            "message":  dict(llmRes),
-            "url": image_url  # This will be an empty string if no imageUrl was provided
-        }
-
-        print(result)
-        # Convert the result to JSON
-        json_string = json.dumps(result)
-
-        logger.info("Successfully generated response for generate_llama")
         return Response(content=json_string, media_type="application/json")
 
-    except ValueError as ve:
-        logger.error(f"Value error in generate_llama: {ve}")
-        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        logger.error(f"Unexpected error in generate_llama: {e}")
+        logger.error(f"Error in generate_llama: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
